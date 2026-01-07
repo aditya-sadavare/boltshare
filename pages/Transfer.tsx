@@ -140,18 +140,24 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
     
     dc.current.onclose = () => console.log('DataChannel Closed (Sender)');
 
-    // Create Offer AFTER datachannel is created
-    const offer = await pc.current!.createOffer();
-    await pc.current!.setLocalDescription(offer);
-    signaling.sendOffer(sessionId, offer);
-    console.log('📤 Offer sent');
+    // CRITICAL: Wait for receiver to join BEFORE sending offer
+    signaling.on('receiver-joined', async (receiverId) => {
+      peerIdRef.current = receiverId;
+      console.log('📢 Receiver joined:', receiverId);
+      setStatus('Receiver found, exchanging keys...');
+      
+      // NOW send offer to the specific receiver
+      const offer = await pc.current!.createOffer();
+      await pc.current!.setLocalDescription(offer);
+      signaling.sendOffer(receiverId, offer);
+      console.log('📤 Offer sent to:', receiverId);
+    });
 
     // Listen for Answer - CRITICAL: Only set remote description once
     signaling.on('answer', async ({ answer, sender }) => {
-      peerIdRef.current = sender;
       if (pc.current && !pc.current.currentRemoteDescription) {
         await pc.current.setRemoteDescription(new RTCSessionDescription(answer));
-        console.log('📥 Answer received and set');
+        console.log('📥 Answer received from:', sender);
       }
     });
 
@@ -207,8 +213,8 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
       
       const answer = await pc.current!.createAnswer();
       await pc.current!.setLocalDescription(answer);
-      signaling.sendAnswer(peerIdRef.current, answer);
-      console.log('📤 Answer sent');
+      signaling.sendAnswer(sender, answer); // Send answer back to the sender
+      console.log('📤 Answer sent to:', sender);
     });
 
     // Listen for ICE Candidates - CRITICAL: Only add after setRemoteDescription
