@@ -3,7 +3,7 @@ import { SIGNALING_SERVER_URL } from '../constants';
 
 class SignalingService {
   private socket: Socket | null = null;
-  private callbacks: Map<string, (data: any) => void> = new Map();
+  private callbacks: Map<string, (data: any) => void[]> = new Map(); // ← Array of callbacks
   private socketId: string | null = null;
 
   connect() {
@@ -55,12 +55,15 @@ class SignalingService {
   }
 
   on(event: string, callback: (data: any) => void) {
-    this.callbacks.set(event, callback);
+    if (!this.callbacks.has(event)) {
+      this.callbacks.set(event, []);
+    }
+    this.callbacks.get(event)!.push(callback); // ← Add to array, don't overwrite
   }
 
   private trigger(event: string, data: any) {
-    const callback = this.callbacks.get(event);
-    if (callback) callback(data);
+    const callbacks = this.callbacks.get(event) || [];
+    callbacks.forEach(callback => callback(data)); // ← Call all callbacks
   }
   
   disconnect() {
