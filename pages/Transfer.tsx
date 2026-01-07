@@ -27,6 +27,7 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
   const pc = useRef<RTCPeerConnection | null>(null);
   const dc = useRef<RTCDataChannel | null>(null);
   const peerIdRef = useRef<string | null>(null); // Store peer ID for ICE candidates
+  const initializationInProgress = useRef(false); // Prevent double initialization
   const [circleSize, setCircleSize] = useState(280);
   
   // Sender Refs
@@ -43,6 +44,13 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
   const lastBytes = useRef<number>(0);
 
   useEffect(() => {
+    // CRITICAL: Prevent double initialization in React StrictMode
+    if (initializationInProgress.current) {
+      console.log('⏭️ Initialization already in progress, skipping');
+      return;
+    }
+    initializationInProgress.current = true;
+
     // CRITICAL: Initialize signaling connection FIRST
     console.log(`📍 Transfer mounted: role=${role}, sessionId=${sessionId}`);
     signaling.connect();
@@ -50,6 +58,13 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
     // Note: Session creation/joining happens in Send/Receive pages
     // Transfer component just sets up WebRTC
     console.log(`🔗 Transfer ${role}: sessionId=${sessionId}`);
+    
+    // Close previous peer connection if it exists
+    if (pc.current) {
+      console.log('🔌 Closing previous peer connection');
+      pc.current.close();
+      pc.current = null;
+    }
     
     // NOW setup WebRTC after session is initialized
     setupWebRTC();
@@ -62,12 +77,13 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
     };
     compute();
     window.addEventListener('resize', compute);
+    
     // Cleanup
     return () => {
-      pc.current?.close();
       window.removeEventListener('resize', compute);
+      // Don't close pc here - let it persist for the transfer
     };
-  }, [role, sessionId]); // Add dependencies to track changes
+  }, []); // ✅ Empty dependency array - mount only once
 
   const setupWebRTC = async () => {
     pc.current = new RTCPeerConnection(ICE_SERVERS);
@@ -140,6 +156,8 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
     dc.current = pc.current!.createDataChannel("file-transfer", { ordered: true });
     dc.current.binaryType = "arraybuffer"; // CRITICAL for binary data
     
+    console.log('📦 DataChannel created, waiting for onopen...');
+    
     // CRITICAL: onopen must fire before sending data
     dc.current.onopen = () => {
        console.log('✅ DataChannel Open (SENDER) - Ready to send!');
@@ -152,9 +170,12 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
       setStatus('DataChannel Error');
     };
     
-    dc.current.onclose = () => console.log('DataChannel Closed (Sender)');
+    dc.current.onclose = () => {
+      console.log('⚠️ DataChannel Closed (Sender) - connection ended');
+    };
 
     // CRITICAL: Wait for receiver to join BEFORE sending offer
+    console.log('⏳ setupSender: Waiting for receiver-joined event...');
     const waitForReceiver = new Promise<string>((resolve) => {
       const handleReceiverJoined = (receiverId: string) => {
         console.log('📢 Receiver joined:', receiverId);
@@ -164,6 +185,7 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
       
       // Timeout after 30 seconds
       setTimeout(() => {
+        console.error('❌ setupSender timeout - receiver never joined');
         setStatus('❌ Receiver timeout');
         resolve('');
       }, 30000);
@@ -179,16 +201,26 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
     setStatus('Receiver found, exchanging keys...');
     
     // NOW send offer to the specific receiver
-    const offer = await pc.current!.createOffer();
-    await pc.current!.setLocalDescription(offer);
-    signaling.sendOffer(receiverId, offer);
-    console.log('📤 Offer sent to:', receiverId);
+    try {
+      const offer = await pc.current!.createOffer();
+      await pc.current!.setLocalDescription(offer);
+      signaling.sendOffer(receiverId, offer);
+      console.log('📤 Offer sent to:', receiverId);
+    } catch (err) {
+      console.error('❌ Error creating/sending offer:', err);
+      setStatus('Error creating offer');
+      return;
+    }
 
     // Listen for Answer - CRITICAL: Only set remote description once
     signaling.on('answer', async ({ answer, sender }) => {
       if (pc.current && !pc.current.currentRemoteDescription) {
-        await pc.current.setRemoteDescription(new RTCSessionDescription(answer));
-        console.log('📥 Answer received from:', sender);
+        try {
+          await pc.current.setRemoteDescription(new RTCSessionDescription(answer));
+          console.log('📥 Answer received from:', sender);
+        } catch (err) {
+          console.error('❌ Error setting answer:', err);
+        }
       }
     });
 

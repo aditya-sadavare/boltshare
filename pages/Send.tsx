@@ -32,19 +32,9 @@ export const Send: React.FC<SendProps> = ({ onBack, onFileSelected, onSessionCre
     return () => window.removeEventListener('resize', compute);
   }, []);
 
-  useEffect(() => {
-    // Generate session immediately upon mounting or when file is selected? 
-    // Flow: Select file -> Generate Code.
-  }, []);
-
-  useEffect(() => {
-    // Listen for receiver join
-    const handleJoin = (receiverId: string) => {
-      console.log('Receiver connected:', receiverId);
-      onReceiverConnected();
-    };
-    signaling.on('receiver-joined', handleJoin);
-  }, [onReceiverConnected]);
+  // ❌ REMOVED: Do NOT listen for receiver-joined here!
+  // Transfer component will handle the WebRTC flow and receiver-joined event
+  // Having two listeners causes race conditions
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -57,6 +47,10 @@ export const Send: React.FC<SendProps> = ({ onBack, onFileSelected, onSessionCre
       setShareCode(code);
       onSessionCreated(code);
       signaling.createSession(code);
+      
+      // ✅ Navigate to Transfer immediately - don't wait for receiver!
+      // Transfer will wait for receiver-joined in setupSender()
+      setTimeout(() => onReceiverConnected(), 500);
     }
   };
 
