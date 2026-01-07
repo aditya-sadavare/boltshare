@@ -1,0 +1,7 @@
+{
+  "name": "BoltShare",
+  "description": "Premium, privacy-first, instant file sharing via WebRTC and LAN.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
