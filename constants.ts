@@ -1,4 +1,4 @@
-export const SIGNALING_SERVER_URL = 'http://localhost:3001'; // Update for production
+export const SIGNALING_SERVER_URL = 'https://boltsharebackend.onrender.com';
 export const CHUNK_SIZE = 64 * 1024; // 64KB chunks for stability
 export const ICE_SERVERS = {
   iceServers: [
