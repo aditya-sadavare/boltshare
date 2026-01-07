@@ -76,11 +76,14 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
   const setupWebRTC = async () => {
     pc.current = new RTCPeerConnection(ICE_SERVERS);
 
-    // ICE Connection State Debugging
+    // ICE Connection State Debugging (REQUIRED)
     pc.current.oniceconnectionstatechange = () => {
-      console.log('🔌 ICE State:', pc.current?.iceConnectionState);
-      if (pc.current?.iceConnectionState === 'failed') {
-        setStatus('❌ ICE Failed - Check Network/TURN');
+      const state = pc.current?.iceConnectionState;
+      console.log('🔌 ICE State:', state);
+      if (state === 'failed') {
+        setStatus('❌ ICE Failed - TURN server needed');
+      } else if (state === 'connected' || state === 'completed') {
+        console.log('✅ ICE Connected!');
       }
     };
 
@@ -96,10 +99,10 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
       }
     };
 
-    // Connection State
+    // Connection State Debugging (REQUIRED)
     pc.current.onconnectionstatechange = () => {
       const state = pc.current?.connectionState;
-      console.log('Connection state:', state);
+      console.log('🔗 Connection State:', state);
       if (state === 'connected') {
         setStatus('Connected');
         detectMode();
@@ -139,10 +142,11 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
 
   const setupSender = async () => {
     dc.current = pc.current!.createDataChannel("file-transfer", { ordered: true });
+    dc.current.binaryType = "arraybuffer"; // CRITICAL for binary data
     
     // CRITICAL: onopen must fire before sending data
     dc.current.onopen = () => {
-       console.log('✅ DataChannel Open (SENDER)');
+       console.log('✅ DataChannel Open (SENDER) - Ready to send!');
        setStatus('Ready to send');
        sendMetadata();
     };
@@ -200,10 +204,11 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
     // CRITICAL: ondatachannel fires when sender creates channel
     pc.current!.ondatachannel = (e) => {
       dc.current = e.channel;
+      dc.current.binaryType = "arraybuffer"; // CRITICAL for binary data
       console.log('✅ DataChannel received (RECEIVER)');
       
       dc.current.onopen = () => {
-        console.log('✅ DataChannel Open (RECEIVER)');
+        console.log('✅ DataChannel Open (RECEIVER) - Ready to receive!');
         setStatus('Ready to receive');
         // Request first chunk when ready
         setTimeout(() => {
