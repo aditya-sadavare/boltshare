@@ -19,7 +19,7 @@ class SignalingService {
 
       this.socket.on('receiver-joined', (id) => this.trigger('receiver-joined', id));
       this.socket.on('offer', (data) => {
-        console.log('📥 Offer received from:', data.sender);
+        console.log('📥 [SIGNALING] Offer received from:', data.sender);
         this.trigger('offer', { ...data, sender: data.sender });
       });
       this.socket.on('answer', (data) => {
@@ -58,12 +58,18 @@ class SignalingService {
     if (!this.callbacks.has(event)) {
       this.callbacks.set(event, []);
     }
-    this.callbacks.get(event)!.push(callback); // ← Add to array, don't overwrite
+    const callbackList = this.callbacks.get(event)!;
+    console.log(`👂 [SIGNALING] Listener registered for "${event}". Total listeners: ${callbackList.length + 1}`);
+    callbackList.push(callback); // ← Add to array, don't overwrite
   }
 
   private trigger(event: string, data: any) {
     const callbacks = this.callbacks.get(event) || [];
-    callbacks.forEach(callback => callback(data)); // ← Call all callbacks
+    console.log(`🔔 [SIGNALING] Triggering "${event}" event. Callbacks: ${callbacks.length}`);
+    callbacks.forEach((callback, index) => {
+      console.log(`  → Calling callback ${index + 1}/${callbacks.length}`);
+      callback(data);
+    });
   }
   
   disconnect() {

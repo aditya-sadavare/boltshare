@@ -44,16 +44,12 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
 
   useEffect(() => {
     // CRITICAL: Initialize signaling connection FIRST
+    console.log(`📍 Transfer mounted: role=${role}, sessionId=${sessionId}`);
     signaling.connect();
     
-    // CRITICAL: Create or join session BEFORE WebRTC
-    if (role === 'SENDER') {
-      console.log('📢 Sender: Creating session:', sessionId);
-      signaling.createSession(sessionId);
-    } else {
-      console.log('📢 Receiver: Joining session:', sessionId);
-      signaling.joinSession(sessionId);
-    }
+    // Note: Session creation/joining happens in Send/Receive pages
+    // Transfer component just sets up WebRTC
+    console.log(`🔗 Transfer ${role}: sessionId=${sessionId}`);
     
     // NOW setup WebRTC after session is initialized
     setupWebRTC();
@@ -71,7 +67,7 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
       pc.current?.close();
       window.removeEventListener('resize', compute);
     };
-  }, []);
+  }, [role, sessionId]); // Add dependencies to track changes
 
   const setupWebRTC = async () => {
     pc.current = new RTCPeerConnection(ICE_SERVERS);
@@ -159,17 +155,34 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
     dc.current.onclose = () => console.log('DataChannel Closed (Sender)');
 
     // CRITICAL: Wait for receiver to join BEFORE sending offer
-    signaling.on('receiver-joined', async (receiverId) => {
-      peerIdRef.current = receiverId;
-      console.log('📢 Receiver joined:', receiverId);
-      setStatus('Receiver found, exchanging keys...');
+    const waitForReceiver = new Promise<string>((resolve) => {
+      const handleReceiverJoined = (receiverId: string) => {
+        console.log('📢 Receiver joined:', receiverId);
+        resolve(receiverId);
+      };
+      signaling.on('receiver-joined', handleReceiverJoined);
       
-      // NOW send offer to the specific receiver
-      const offer = await pc.current!.createOffer();
-      await pc.current!.setLocalDescription(offer);
-      signaling.sendOffer(receiverId, offer);
-      console.log('📤 Offer sent to:', receiverId);
+      // Timeout after 30 seconds
+      setTimeout(() => {
+        setStatus('❌ Receiver timeout');
+        resolve('');
+      }, 30000);
     });
+    
+    const receiverId = await waitForReceiver;
+    if (!receiverId) {
+      console.error('No receiver joined');
+      return;
+    }
+    
+    peerIdRef.current = receiverId;
+    setStatus('Receiver found, exchanging keys...');
+    
+    // NOW send offer to the specific receiver
+    const offer = await pc.current!.createOffer();
+    await pc.current!.setLocalDescription(offer);
+    signaling.sendOffer(receiverId, offer);
+    console.log('📤 Offer sent to:', receiverId);
 
     // Listen for Answer - CRITICAL: Only set remote description once
     signaling.on('answer', async ({ answer, sender }) => {

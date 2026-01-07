@@ -13,8 +13,14 @@ export const Receive: React.FC<ReceiveProps> = ({ onBack, onConnect }) => {
   const [code, setCode] = useState('');
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState('');
+  const [isConnecting, setIsConnecting] = useState(false);
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const [hasCameraPermission, setHasCameraPermission] = useState(false);
+
+  // Ensure signaling is connected on mount
+  useEffect(() => {
+    signaling.connect();
+  }, []);
 
   // Simplified Mock QR Logic as we don't have a reliable library in this text environment
   // In production, use `jsQR` with `requestAnimationFrame` on a canvas
@@ -48,14 +54,63 @@ export const Receive: React.FC<ReceiveProps> = ({ onBack, onConnect }) => {
     setIsScanning(false);
   };
 
-  const handleConnect = () => {
+  const handleConnect = async () => {
     if (code.length < 6) {
       setError('Invalid code');
       return;
     }
-    // Verify session exists via signaling
-    signaling.joinSession(code);
-    onConnect(code);
+    
+    console.log('🔗 Receiver: handleConnect called, code:', code);
+    setIsConnecting(true);
+    setError('');
+    
+    try {
+      // CRITICAL: Wait for server to confirm session exists
+      // by listening for 'offer' which comes only if sender exists
+      console.log('⏳ Waiting for offer from server...');
+      
+      let sessionConfirmed = false;
+      const timeout = new Promise<boolean>((resolve) => {
+        console.log('⏰ 10 second timeout started');
+        setTimeout(() => {
+          console.log('⏰ Timeout fired - no offer received');
+          resolve(false);
+        }, 10000);
+      });
+      
+      const confirmation = new Promise<boolean>((resolve) => {
+        const handleOffer = (data: any) => {
+          console.log('✅ Session confirmed! Offer received:', data);
+          resolve(true);
+          // Don't remove listener - we need it in Transfer component
+        };
+        console.log('👂 Registering offer listener');
+        signaling.on('offer', handleOffer);
+      });
+      
+      // Join session on server
+      console.log('📢 Sending joinSession to server:', code);
+      signaling.joinSession(code);
+      
+      // Wait for session confirmation or timeout
+      sessionConfirmed = await Promise.race([confirmation, timeout]);
+      console.log('🏁 Session confirmation result:', sessionConfirmed);
+      
+      if (!sessionConfirmed) {
+        console.error('❌ Session not confirmed - timeout or no sender');
+        setError('Session not found or sender offline');
+        setIsConnecting(false);
+        return;
+      }
+      
+      console.log('✅ Moving to Transfer page');
+      // NOW navigate to Transfer
+      onConnect(code);
+    } catch (err) {
+      console.error('❌ Connection error:', err);
+      setError('Connection failed');
+      setIsConnecting(false);
+    }
   };
 
   return (
@@ -88,8 +143,8 @@ export const Receive: React.FC<ReceiveProps> = ({ onBack, onConnect }) => {
                 />
               </div>
               {error && <p className="text-red-500 text-sm text-center">{error}</p>}
-              <Button fullWidth onClick={handleConnect} disabled={code.length < 6}>
-                Connect
+              <Button fullWidth onClick={handleConnect} disabled={code.length < 6 || isConnecting}>
+                {isConnecting ? 'Connecting...' : 'Connect'}
                 <ArrowRight className="w-5 h-5" />
               </Button>
             </div>
