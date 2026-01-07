@@ -43,7 +43,21 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
   const lastBytes = useRef<number>(0);
 
   useEffect(() => {
+    // CRITICAL: Initialize signaling connection FIRST
+    signaling.connect();
+    
+    // CRITICAL: Create or join session BEFORE WebRTC
+    if (role === 'SENDER') {
+      console.log('📢 Sender: Creating session:', sessionId);
+      signaling.createSession(sessionId);
+    } else {
+      console.log('📢 Receiver: Joining session:', sessionId);
+      signaling.joinSession(sessionId);
+    }
+    
+    // NOW setup WebRTC after session is initialized
     setupWebRTC();
+    
     const compute = () => {
       const w = window.innerWidth;
       if (w < 640) setCircleSize(220);
