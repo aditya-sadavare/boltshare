@@ -4,19 +4,31 @@ import { SIGNALING_SERVER_URL } from '../constants';
 class SignalingService {
   private socket: Socket | null = null;
   private callbacks: Map<string, (data: any) => void> = new Map();
+  private socketId: string | null = null;
 
   connect() {
     if (!this.socket) {
-      this.socket = io(SIGNALING_SERVER_URL);
+      this.socket = io(SIGNALING_SERVER_URL, {
+        transports: ["websocket"]
+      });
       
       this.socket.on('connect', () => {
-        console.log('Connected to signaling server');
+        this.socketId = this.socket!.id;
+        console.log('✅ Connected to signaling server:', this.socketId);
       });
 
       this.socket.on('receiver-joined', (id) => this.trigger('receiver-joined', id));
-      this.socket.on('offer', (data) => this.trigger('offer', data));
-      this.socket.on('answer', (data) => this.trigger('answer', data));
-      this.socket.on('candidate', (data) => this.trigger('candidate', data));
+      this.socket.on('offer', (data) => {
+        console.log('📥 Offer received from:', data.sender);
+        this.trigger('offer', { ...data, sender: data.sender });
+      });
+      this.socket.on('answer', (data) => {
+        console.log('📥 Answer received from:', data.sender);
+        this.trigger('answer', { ...data, sender: data.sender });
+      });
+      this.socket.on('candidate', (data) => {
+        this.trigger('candidate', data);
+      });
       this.socket.on('session-error', (err) => this.trigger('error', err));
     }
     return this.socket;

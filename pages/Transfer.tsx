@@ -26,6 +26,7 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
   // WebRTC Refs
   const pc = useRef<RTCPeerConnection | null>(null);
   const dc = useRef<RTCDataChannel | null>(null);
+  const peerIdRef = useRef<string | null>(null); // Store peer ID for ICE candidates
   const [circleSize, setCircleSize] = useState(280);
   
   // Sender Refs
@@ -61,13 +62,23 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
   const setupWebRTC = async () => {
     pc.current = new RTCPeerConnection(ICE_SERVERS);
 
-    // ICE Candidates
+    // ICE Connection State Debugging
+    pc.current.oniceconnectionstatechange = () => {
+      console.log('🔌 ICE State:', pc.current?.iceConnectionState);
+      if (pc.current?.iceConnectionState === 'failed') {
+        setStatus('❌ ICE Failed - Check Network/TURN');
+      }
+    };
+
+    // ICE Candidates - CRITICAL: Send after peer connection created
     pc.current.onicecandidate = (event) => {
       if (event.candidate) {
-        // Find the 'other' peer. 
-        // In a real app we'd map user IDs. Here we assume 1-to-1 in the session room.
-        // We broadcast candidate to session room via server.
-        signaling.sendCandidate(sessionId, event.candidate);
+        console.log('📡 ICE Candidate:', event.candidate.candidate);
+        // Store peer ID from signaling events
+        const peerId = peerIdRef.current;
+        if (peerId) {
+          signaling.sendCandidate(peerId, event.candidate);
+        }
       }
     };
 
@@ -113,61 +124,103 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
   };
 
   const setupSender = async () => {
-    dc.current = pc.current!.createDataChannel("file-transfer");
+    dc.current = pc.current!.createDataChannel("file-transfer", { ordered: true });
+    
+    // CRITICAL: onopen must fire before sending data
     dc.current.onopen = () => {
-       console.log('DataChannel Open');
+       console.log('✅ DataChannel Open (SENDER)');
+       setStatus('Ready to send');
        sendMetadata();
     };
-    dc.current.onclose = () => console.log('DataChannel Closed');
+    
+    dc.current.onerror = (e) => {
+      console.error('❌ DataChannel Error:', e);
+      setStatus('DataChannel Error');
+    };
+    
+    dc.current.onclose = () => console.log('DataChannel Closed (Sender)');
 
-    // Create Offer
+    // Create Offer AFTER datachannel is created
     const offer = await pc.current!.createOffer();
     await pc.current!.setLocalDescription(offer);
     signaling.sendOffer(sessionId, offer);
+    console.log('📤 Offer sent');
 
-    // Listen for Answer
-    signaling.on('answer', async ({ answer }) => {
-      if(!pc.current?.currentRemoteDescription)
-        await pc.current?.setRemoteDescription(answer);
+    // Listen for Answer - CRITICAL: Only set remote description once
+    signaling.on('answer', async ({ answer, sender }) => {
+      peerIdRef.current = sender;
+      if (pc.current && !pc.current.currentRemoteDescription) {
+        await pc.current.setRemoteDescription(new RTCSessionDescription(answer));
+        console.log('📥 Answer received and set');
+      }
     });
 
-    // Listen for Candidates
+    // Listen for ICE Candidates - CRITICAL: Only add after setRemoteDescription
     signaling.on('candidate', async ({ candidate }) => {
-      if(pc.current) await pc.current.addIceCandidate(candidate);
+      if (pc.current && pc.current.remoteDescription) {
+        try {
+          await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
+          console.log('✅ ICE candidate added');
+        } catch (e) {
+          console.error('❌ Error adding ICE candidate:', e);
+        }
+      }
     });
     
-    // Listen for request-chunk (Flow control)
+    // Flow control: request-chunk from receiver
     dc.current.onmessage = (e) => {
         const msg = JSON.parse(e.data);
-        if(msg.type === 'request-chunk') {
+        if (msg.type === 'request-chunk') {
             sendChunk();
         }
     };
   };
 
   const setupReceiver = () => {
+    // CRITICAL: ondatachannel fires when sender creates channel
     pc.current!.ondatachannel = (e) => {
       dc.current = e.channel;
-      dc.current.onopen = () => console.log('DataChannel Open (Receiver)');
-      dc.current.onmessage = handleReceiveMessage;
+      console.log('✅ DataChannel received (RECEIVER)');
       
-      // Request first chunk when ready
-      setTimeout(() => {
-          dc.current?.send(JSON.stringify({ type: 'request-chunk' }));
-      }, 500);
+      dc.current.onopen = () => {
+        console.log('✅ DataChannel Open (RECEIVER)');
+        setStatus('Ready to receive');
+        // Request first chunk when ready
+        setTimeout(() => {
+            dc.current?.send(JSON.stringify({ type: 'request-chunk' }));
+        }, 100);
+      };
+      
+      dc.current.onerror = (e) => {
+        console.error('❌ DataChannel Error:', e);
+        setStatus('DataChannel Error');
+      };
+      
+      dc.current.onmessage = handleReceiveMessage;
     };
 
     // Listen for Offer
-    signaling.on('offer', async ({ offer }) => {
-      await pc.current!.setRemoteDescription(offer);
+    signaling.on('offer', async ({ offer, sender }) => {
+      peerIdRef.current = sender;
+      console.log('📥 Offer received from:', sender);
+      await pc.current!.setRemoteDescription(new RTCSessionDescription(offer));
+      
       const answer = await pc.current!.createAnswer();
       await pc.current!.setLocalDescription(answer);
-      signaling.sendAnswer(sessionId, answer);
+      signaling.sendAnswer(peerIdRef.current, answer);
+      console.log('📤 Answer sent');
     });
 
-    // Listen for Candidates
+    // Listen for ICE Candidates - CRITICAL: Only add after setRemoteDescription
     signaling.on('candidate', async ({ candidate }) => {
-      if(pc.current) await pc.current.addIceCandidate(candidate);
+      if (pc.current && pc.current.remoteDescription) {
+        try {
+          await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
+          console.log('✅ ICE candidate added');
+        } catch (e) {
+          console.error('❌ Error adding ICE candidate:', e);
+        }
+      }
     });
   };
 
