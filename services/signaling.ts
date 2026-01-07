@@ -17,16 +17,20 @@ class SignalingService {
         console.log('✅ Connected to signaling server:', this.socketId);
       });
 
-      this.socket.on('receiver-joined', (id) => this.trigger('receiver-joined', id));
+      this.socket.on('receiver-joined', (id) => {
+        console.log('🔔 [SERVER] Receiver joined event fired:', id);
+        this.trigger('receiver-joined', id);
+      });
       this.socket.on('offer', (data) => {
-        console.log('📥 [SIGNALING] Offer received from:', data.sender);
+        console.log('📥 [SERVER] Offer received from:', data.sender);
         this.trigger('offer', { ...data, sender: data.sender });
       });
       this.socket.on('answer', (data) => {
-        console.log('📥 Answer received from:', data.sender);
+        console.log('📥 [SERVER] Answer received from:', data.sender);
         this.trigger('answer', { ...data, sender: data.sender });
       });
       this.socket.on('candidate', (data) => {
+        console.log('❄️ [SERVER] ICE candidate received, triggering listeners');
         this.trigger('candidate', data);
       });
       this.socket.on('session-error', (err) => this.trigger('error', err));

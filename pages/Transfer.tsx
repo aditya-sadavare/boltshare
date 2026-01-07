@@ -183,12 +183,8 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
       };
       signaling.on('receiver-joined', handleReceiverJoined);
       
-      // Timeout after 30 seconds
-      setTimeout(() => {
-        console.error('❌ setupSender timeout - receiver never joined');
-        setStatus('❌ Receiver timeout');
-        resolve('');
-      }, 30000);
+      // ❌ FIX #4: Removed timeout - receiver already joined!
+      // If receiver didn't join, server wouldn't emit receiver-joined event at all
     });
     
     const receiverId = await waitForReceiver;
@@ -213,6 +209,7 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
     }
 
     // Listen for Answer - CRITICAL: Only set remote description once
+    // ✅ Already globally registered, just consume it
     signaling.on('answer', async ({ answer, sender }) => {
       if (pc.current && !pc.current.currentRemoteDescription) {
         try {
@@ -225,6 +222,7 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
     });
 
     // Listen for ICE Candidates - CRITICAL: Only add after setRemoteDescription
+    // ✅ Already globally registered, just consume it
     signaling.on('candidate', async ({ candidate }) => {
       if (pc.current && pc.current.remoteDescription) {
         try {
@@ -233,6 +231,8 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
         } catch (e) {
           console.error('❌ Error adding ICE candidate:', e);
         }
+      } else {
+        console.log('⏳ Candidate arrived before remote description, will be buffered on receiver side');
       }
     });
     
@@ -246,6 +246,9 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
   };
 
   const setupReceiver = () => {
+    // ✅ FIX #2: Buffer for ICE candidates that arrive before setRemoteDescription
+    const pendingCandidates: RTCIceCandidateInit[] = [];
+
     // CRITICAL: ondatachannel fires when sender creates channel
     pc.current!.ondatachannel = (e) => {
       dc.current = e.channel;
@@ -269,29 +272,58 @@ export const Transfer: React.FC<TransferProps> = ({ role, sessionId, file, onCom
       dc.current.onmessage = handleReceiveMessage;
     };
 
-    // Listen for Offer
-    signaling.on('offer', async ({ offer, sender }) => {
+    // ✅ FIX #1: DO NOT re-register 'offer' listener here
+    // It's already registered globally in signaling service
+    // Instead, listen for the NEXT offer in case of reconnection
+    const handleOfferOnce = async ({ offer, sender }: any) => {
+      console.log('📥 [RECEIVER] Processing offer from:', sender);
       peerIdRef.current = sender;
-      console.log('📥 Offer received from:', sender);
-      await pc.current!.setRemoteDescription(new RTCSessionDescription(offer));
       
-      const answer = await pc.current!.createAnswer();
-      await pc.current!.setLocalDescription(answer);
-      signaling.sendAnswer(sender, answer); // Send answer back to the sender
-      console.log('📤 Answer sent to:', sender);
-    });
+      try {
+        await pc.current!.setRemoteDescription(new RTCSessionDescription(offer));
+        
+        // ✅ FIX #2: Now process any pending ICE candidates
+        console.log(`🧊 Processing ${pendingCandidates.length} pending ICE candidates`);
+        for (const candidate of pendingCandidates) {
+          try {
+            await pc.current!.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (e) {
+            console.error('❌ Error adding pending ICE candidate:', e);
+          }
+        }
+        pendingCandidates.length = 0; // Clear buffer
+        
+        const answer = await pc.current!.createAnswer();
+        await pc.current!.setLocalDescription(answer);
+        signaling.sendAnswer(sender, answer);
+        console.log('📤 Answer sent to:', sender);
+      } catch (err) {
+        console.error('❌ Error handling offer:', err);
+      }
+    };
+    
+    signaling.on('offer', handleOfferOnce);
 
-    // Listen for ICE Candidates - CRITICAL: Only add after setRemoteDescription
-    signaling.on('candidate', async ({ candidate }) => {
+    // ✅ FIX #2: Buffer ICE candidates until setRemoteDescription
+    const handleCandidate = async (data: any) => {
+      const { candidate } = data;
+      
       if (pc.current && pc.current.remoteDescription) {
+        // Remote description already set, add immediately
         try {
           await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
-          console.log('✅ ICE candidate added');
+          console.log('✅ ICE candidate added immediately');
         } catch (e) {
           console.error('❌ Error adding ICE candidate:', e);
         }
+      } else {
+        // Remote description not set yet, buffer it
+        console.log('🧊 ICE candidate buffered (no remote description yet)');
+        pendingCandidates.push(candidate);
       }
-    });
+    };
+    
+    signaling.on('candidate', handleCandidate);
   };
 
   const sendMetadata = () => {
